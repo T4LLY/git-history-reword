@@ -336,19 +336,23 @@ async function assertGitHistorySupported(cwd) {
 }
 
 async function getCommitMessage(cwd, rev) {
-  const raw = await git(cwd, ['cat-file', 'commit', rev], 8 * 1024 * 1024);
-  const separator = raw.indexOf('\n\n');
+  const raw = await git(cwd, ['cat-file', 'commit', rev], 8 * 1024 * 1024, { encoding: 'buffer' });
+  const separator = raw.indexOf(Buffer.from('\n\n'));
   if (separator === -1) throw new Error(`Commit ${rev} has no message separator.`);
   return raw.slice(separator + 2);
 }
 
 function splitMessage(message) {
-  const newline = message.indexOf('\n');
+  const newline = Buffer.isBuffer(message) ? message.indexOf(0x0a) : message.indexOf('\n');
   if (newline === -1) return { subject: message, tail: null };
   return { subject: message.slice(0, newline), tail: message.slice(newline + 1) };
 }
 
 function joinMessage(subject, tail) {
+  if (Buffer.isBuffer(tail)) {
+    const subjectBuffer = Buffer.isBuffer(subject) ? subject : Buffer.from(subject, 'utf8');
+    return Buffer.concat([subjectBuffer, Buffer.from('\n'), tail]);
+  }
   return tail === null ? subject : `${subject}\n${tail}`;
 }
 
@@ -356,7 +360,7 @@ async function runHistoryReword(cwd, rev, message) {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'git-history-reword-'));
   try {
     const messagePath = path.join(tempDir, 'message.txt');
-    await fs.promises.writeFile(messagePath, message, 'utf8');
+    await fs.promises.writeFile(messagePath, message);
     const editor = await createEditor(tempDir, messagePath);
     const env = { ...process.env, GIT_EDITOR: editor };
     await git(cwd, ['history', 'reword', rev, '--update-refs=head'], 8 * 1024 * 1024, { env });
@@ -381,15 +385,19 @@ async function createEditor(tempDir, messagePath) {
 
 function git(cwd, args, maxBuffer = 4 * 1024 * 1024, options = {}) {
   return new Promise((resolve, reject) => {
+    const encoding = options.encoding === 'buffer' ? null : options.encoding;
+    const execOptions = {
+      cwd,
+      windowsHide: true,
+      maxBuffer,
+      env: options.env || process.env
+    };
+    if (encoding !== undefined) execOptions.encoding = encoding;
+
     const child = cp.execFile(
       'git',
       args,
-      {
-        cwd,
-        windowsHide: true,
-        maxBuffer,
-        env: options.env || process.env
-      },
+      execOptions,
       (error, stdout, stderr) => {
         if (error) {
           error.stdout = stdout;
@@ -624,5 +632,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, rewriteDates, getCommitMetadata, git }
+  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, getCommitMetadata, git }
 };
