@@ -10,6 +10,7 @@ const util = require('util');
 const execFile = util.promisify(cp.execFile);
 const MAX_COMMITS = 200;
 const panels = new Map();
+const openingPanels = new Map();
 
 function activate(context) {
   context.subscriptions.push(
@@ -19,11 +20,20 @@ function activate(context) {
 }
 
 async function openHistoryEditor() {
+  let cwd;
+  let opening;
   try {
     const repo = await pickRepository();
     if (!repo) return;
 
-    const cwd = repo.rootUri.fsPath;
+    cwd = repo.rootUri.fsPath;
+    const previous = openingPanels.get(cwd);
+    let release;
+    const promise = new Promise(resolve => { release = resolve; });
+    opening = { promise, release };
+    openingPanels.set(cwd, opening);
+
+    await previous?.promise;
     await assertGitHistorySupported(cwd);
 
     const existing = panels.get(cwd);
@@ -41,7 +51,13 @@ async function openHistoryEditor() {
     );
 
     panels.set(cwd, panel);
-    panel.onDidDispose(() => panels.delete(cwd));
+    panel.onDidDispose(() => {
+      if (panels.get(cwd) === panel) panels.delete(cwd);
+      if (openingPanels.get(cwd) === opening) {
+        openingPanels.delete(cwd);
+      }
+      opening.release();
+    });
     panel.webview.html = getWebviewHtml(panel.webview);
 
     panel.webview.onDidReceiveMessage(async message => {
@@ -64,6 +80,11 @@ async function openHistoryEditor() {
     await sendHistory(panel, cwd);
   } catch (error) {
     vscode.window.showErrorMessage(`Git History Reword: ${formatError(error)}`);
+  } finally {
+    if (cwd && openingPanels.get(cwd) === opening) {
+      openingPanels.delete(cwd);
+    }
+    opening?.release();
   }
 }
 
@@ -726,5 +747,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, loadHistory, syncChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
+  _test: { splitMessage, joinMessage, loadHistory, syncChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml, openHistoryEditor }
 };
