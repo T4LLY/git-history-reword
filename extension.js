@@ -161,27 +161,42 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     return;
   }
 
-  await assertLinearAffectedHistory(cwd, normalized);
+  const originalHistory = await assertLinearAffectedHistory(cwd, normalized, currentHead);
+  const verifiedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
+  if (verifiedHead !== currentHead) {
+    throw new Error('Git history changed during Sync. Refresh before Sync.');
+  }
   const backup = await createBackupRef(cwd, currentHead);
   const headRef = (await git(cwd, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => '')).trim() || 'HEAD';
 
   try {
     await panel.webview.postMessage({ type: 'syncProgress', message: 'Rewriting commit messages…' });
+    let expectedHead = currentHead;
 
-    // Use a stable HEAD-relative ordinal. git history reword rewrites descendant hashes,
-    // but the logical position in a linear history remains the same.
+    // Resolve targets from the verified original HEAD so rewrites cannot shift live ordinals.
     for (const change of normalized) {
       if (change.subject === undefined || change.subject === change.originalSubject.trim()) continue;
 
+      const observedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
+      if (observedHead !== expectedHead) {
+        throw new Error('Git history changed during Sync. Refresh before Sync.');
+      }
+
+      const target = originalHistory[change.index];
       const rev = change.index === 0 ? 'HEAD' : `HEAD~${change.index}`;
-      const fullMessage = await getCommitMessage(cwd, rev);
+      const fullMessage = await getCommitMessage(cwd, target.hash);
       const { tail } = splitMessage(fullMessage);
       const nextMessage = joinMessage(change.subject, tail);
       await runHistoryReword(cwd, rev, nextMessage);
+      expectedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
     }
 
     const dateChanges = normalized.filter(change => change.time && change.time !== change.originalTime);
     if (dateChanges.length > 0) {
+      const observedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
+      if (observedHead !== expectedHead) {
+        throw new Error('Git history changed during Sync. Refresh before Sync.');
+      }
       await panel.webview.postMessage({ type: 'syncProgress', message: 'Rewriting commit timestamps…' });
       await rewriteDates(cwd, dateChanges);
     }
@@ -207,14 +222,14 @@ async function syncChanges(panel, cwd, baseHead, changes) {
   });
 }
 
-async function assertLinearAffectedHistory(cwd, changes) {
+async function assertLinearAffectedHistory(cwd, changes, head = 'HEAD') {
   const maxIndex = Math.max(...changes.map(change => change.index));
   const stdout = await git(cwd, [
     'rev-list',
     '--first-parent',
     '--parents',
     `--max-count=${maxIndex + 1}`,
-    'HEAD'
+    head
   ]);
   const records = stdout
     .split(/\r?\n/)
@@ -231,6 +246,7 @@ async function assertLinearAffectedHistory(cwd, changes) {
   if (merged) {
     throw new Error(`Merge commit ${merged.hash.slice(0, 7)} is inside the affected history. git history reword does not support merge histories yet.`);
   }
+  return records;
 }
 
 async function rewriteDates(cwd, dateChanges) {
