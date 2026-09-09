@@ -74,9 +74,21 @@ async function sendHistory(panel, cwd) {
 
 async function loadHistory(cwd) {
   const [head, branch] = await Promise.all([
-    git(cwd, ['rev-parse', 'HEAD']).then(v => v.trim()),
+    git(cwd, ['rev-parse', 'HEAD']).then(v => v.trim()).catch(error => {
+      if (isUnbornHeadError(error)) return null;
+      throw error;
+    }),
     git(cwd, ['branch', '--show-current']).then(v => v.trim())
   ]);
+
+  if (head === null) {
+    return {
+      head: '',
+      branch: branch || '(detached HEAD)',
+      repoName: path.basename(cwd),
+      commits: []
+    };
+  }
 
   const format = '%H%x1f%h%x1f%aI%x1f%cI%x1f%s%x1f%P%x1e';
   const stdout = await git(cwd, [
@@ -109,6 +121,11 @@ async function loadHistory(cwd) {
     repoName: path.basename(cwd),
     commits
   };
+}
+
+function isUnbornHeadError(error) {
+  const stderr = typeof error?.stderr === 'string' ? error.stderr : '';
+  return /ambiguous argument ['"]HEAD['"]:\s+unknown revision or path not in the working tree/i.test(stderr);
 }
 
 async function syncChanges(panel, cwd, baseHead, changes) {
@@ -679,5 +696,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
+  _test: { splitMessage, joinMessage, loadHistory, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
 };
