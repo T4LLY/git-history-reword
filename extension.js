@@ -184,13 +184,27 @@ async function syncChanges(panel, cwd, baseHead, changes) {
 
 async function assertLinearAffectedHistory(cwd, changes) {
   const maxIndex = Math.max(...changes.map(change => change.index));
-  const records = await getCommitMetadata(cwd, maxIndex + 1);
+  const stdout = await git(cwd, [
+    'rev-list',
+    '--first-parent',
+    '--parents',
+    `--max-count=${maxIndex + 1}`,
+    'HEAD'
+  ]);
+  const records = stdout
+    .split(/\r?\n/)
+    .map(record => record.trim())
+    .filter(Boolean)
+    .map(record => {
+      const [hash, ...parents] = record.split(/\s+/);
+      return { hash, parents };
+    });
   if (records.length <= maxIndex) {
     throw new Error('The selected commit is no longer available. Refresh the list.');
   }
   const merged = records.find(commit => commit.parents.length > 1);
   if (merged) {
-    throw new Error(`Merge commit ${merged.shortHash} is inside the affected history. git history reword does not support merge histories yet.`);
+    throw new Error(`Merge commit ${merged.hash.slice(0, 7)} is inside the affected history. git history reword does not support merge histories yet.`);
   }
 }
 
@@ -665,5 +679,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, getCommitMetadata, git, getWebviewHtml }
+  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
 };
