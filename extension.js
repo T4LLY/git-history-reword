@@ -186,7 +186,15 @@ async function syncChanges(panel, cwd, baseHead, changes) {
       await rewriteDates(cwd, dateChanges);
     }
   } catch (error) {
-    await git(cwd, ['update-ref', '-m', 'Git History Reword: rollback failed sync', headRef, currentHead]).catch(() => {});
+    let rollbackError;
+    try {
+      await git(cwd, ['update-ref', '-m', 'Git History Reword: rollback failed sync', headRef, currentHead]);
+    } catch (error) {
+      rollbackError = error;
+    }
+    if (rollbackError) {
+      throw new Error(`${formatError(error)} (Sync rollback failed. Restore the pre-sync state from backup ${backup}. Rollback error: ${formatError(rollbackError)})`);
+    }
     throw new Error(`${formatError(error)} (Sync rolled back to ${currentHead.slice(0, 8)}.)`);
   }
 
@@ -696,5 +704,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, loadHistory, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
+  _test: { splitMessage, joinMessage, loadHistory, syncChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml }
 };
