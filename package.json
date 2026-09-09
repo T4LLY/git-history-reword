@@ -1,0 +1,50 @@
+{
+  "name": "git-history-reword",
+  "displayName": "Git History Reword",
+  "description": "Edit commit messages and timestamps in a lightweight staged Git history view.",
+  "version": "0.2.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitHistoryReword.open",
+        "title": "Open History Editor",
+        "category": "Git History Reword",
+        "icon": {
+          "light": "media/reword.svg",
+          "dark": "media/reword.svg"
+        }
+      },
+      {
+        "command": "gitHistoryReword.reword",
+        "title": "Open History Editor",
+        "category": "Git History Reword"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitHistoryReword.open",
+          "when": "scmProvider == git",
+          "group": "navigation@50"
+        }
+      ],
+      "scm/repository": [
+        {
+          "command": "gitHistoryReword.open",
+          "when": "scmProvider == git",
+          "group": "inline@50"
+        }
+      ]
+    }
+  }
+}
