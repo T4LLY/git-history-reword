@@ -383,7 +383,9 @@ async function runHistoryReword(cwd, rev, message) {
     await fs.promises.writeFile(messagePath, message);
     const editor = await createEditor(tempDir, messagePath);
     const env = { ...process.env, GIT_EDITOR: editor };
-    await git(cwd, ['history', 'reword', rev, '--update-refs=head'], 8 * 1024 * 1024, { env });
+    // history reword ignores commit.cleanup; this escaped control value disables
+    // printable comment-prefix cleanup without shifting it onto another text character.
+    await git(cwd, ['-c', 'core.commentChar=\\001', 'history', 'reword', rev, '--update-refs=head'], 8 * 1024 * 1024, { env });
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true });
   }
