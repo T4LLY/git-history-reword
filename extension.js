@@ -149,6 +149,14 @@ function isUnbornHeadError(error) {
   return /ambiguous argument ['"]HEAD['"]:\s+unknown revision or path not in the working tree/i.test(stderr);
 }
 
+function getEffectiveChanges(changes) {
+  return changes.filter(change => {
+    const subjectChanged = change.subject !== undefined && change.subject !== change.originalSubject.trim();
+    const timeChanged = change.time !== undefined && change.time !== change.originalTime;
+    return subjectChanged || timeChanged;
+  });
+}
+
 async function syncChanges(panel, cwd, baseHead, changes) {
   if (!Array.isArray(changes) || changes.length === 0) {
     await panel.webview.postMessage({ type: 'syncDone', message: 'No changes.' });
@@ -165,10 +173,16 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     }))
     .filter(change => Number.isInteger(change.index) && change.index >= 0)
     .sort((a, b) => b.index - a.index);
+  const effectiveChanges = getEffectiveChanges(normalized);
 
   const outOfRange = normalized.find(change => change.index >= MAX_COMMITS);
   if (outOfRange) {
     throw new Error(`Commit index ${outOfRange.index} is outside the displayed history range (0-${MAX_COMMITS - 1}).`);
+  }
+
+  if (effectiveChanges.length === 0) {
+    await panel.webview.postMessage({ type: 'syncDone', message: 'No valid changes.' });
+    return;
   }
 
   const currentHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
@@ -176,18 +190,13 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     throw new Error('Git history changed after this list was loaded. Refresh before Sync.');
   }
 
-  for (const change of normalized) {
+  for (const change of effectiveChanges) {
     if (change.subject !== undefined && change.subject.length === 0) {
       throw new Error(`Commit HEAD~${change.index}: commit message cannot be empty.`);
     }
   }
 
-  if (normalized.length === 0) {
-    await panel.webview.postMessage({ type: 'syncDone', message: 'No valid changes.' });
-    return;
-  }
-
-  const originalHistory = await assertLinearAffectedHistory(cwd, normalized, currentHead);
+  const originalHistory = await assertLinearAffectedHistory(cwd, effectiveChanges, currentHead);
   const verifiedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
   if (verifiedHead !== currentHead) {
     throw new Error('Git history changed during Sync. Refresh before Sync.');
@@ -200,7 +209,7 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     let expectedHead = currentHead;
 
     // Resolve targets from the verified original HEAD so rewrites cannot shift live ordinals.
-    for (const change of normalized) {
+    for (const change of effectiveChanges) {
       if (change.subject === undefined || change.subject === change.originalSubject.trim()) continue;
 
       const observedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
@@ -217,7 +226,7 @@ async function syncChanges(panel, cwd, baseHead, changes) {
       expectedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
     }
 
-    const dateChanges = normalized.filter(change => change.time && change.time !== change.originalTime);
+    const dateChanges = effectiveChanges.filter(change => change.time && change.time !== change.originalTime);
     if (dateChanges.length > 0) {
       const observedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
       if (observedHead !== expectedHead) {
@@ -243,7 +252,7 @@ async function syncChanges(panel, cwd, baseHead, changes) {
   const nextModel = await loadHistory(cwd);
   await panel.webview.postMessage({
     type: 'syncDone',
-    message: `Synced ${normalized.length} commit${normalized.length === 1 ? '' : 's'}. Backup: ${backup}`,
+    message: `Synced ${effectiveChanges.length} commit${effectiveChanges.length === 1 ? '' : 's'}. Backup: ${backup}`,
     ...nextModel
   });
 }
@@ -657,9 +666,10 @@ function getWebviewHtml(webview) {
 
   function updateEdit(index, commit, row, messageInput, timeInput) {
     const subject = messageInput.value.trim();
+    const originalSubject = commit.subject.trim();
     const originalLocal = dateToLocalInput(commit.authorDate);
     const timeLocal = timeInput.value;
-    const subjectChanged = subject !== commit.subject;
+    const subjectChanged = subject !== originalSubject;
     const timeChanged = timeLocal !== originalLocal;
 
     if (!subjectChanged && !timeChanged) {
@@ -752,5 +762,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, loadHistory, syncChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml, openHistoryEditor }
+  _test: { splitMessage, joinMessage, loadHistory, syncChanges, getEffectiveChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml, openHistoryEditor }
 };
