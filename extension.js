@@ -505,6 +505,7 @@ function getWebviewHtml(webview) {
   const vscode = acquireVsCodeApi();
   let model = null;
   const edits = new Map();
+  let syncInProgress = false;
   const rowsEl = document.getElementById('rows');
   const syncButton = document.getElementById('sync');
   const refreshButton = document.getElementById('refresh');
@@ -545,7 +546,7 @@ function getWebviewHtml(webview) {
     }
 
     rowsEl.innerHTML = model.commits.map(commit => {
-      const disabled = commit.parentCount > 1 ? 'disabled' : '';
+      const disabled = commit.parentCount > 1 || syncInProgress ? 'disabled' : '';
       const mergeClass = commit.parentCount > 1 ? ' merge' : '';
       return '<div class="row' + mergeClass + '" data-index="' + commit.index + '">' +
         '<div class="graph"><span class="dot"></span></div>' +
@@ -593,13 +594,21 @@ function getWebviewHtml(webview) {
   function updateToolbar() {
     const count = edits.size;
     countEl.textContent = count + ' changed';
-    syncButton.disabled = count === 0;
+    syncButton.disabled = syncInProgress || count === 0;
+  }
+
+  function setSyncInProgress(value) {
+    syncInProgress = value;
+    rowsEl.querySelectorAll('.message-input, .time-input').forEach(input => {
+      input.disabled = value || input.closest('.row').classList.contains('merge');
+    });
+    syncButton.disabled = value || edits.size === 0;
+    refreshButton.disabled = value;
   }
 
   syncButton.addEventListener('click', () => {
     if (!model || edits.size === 0) return;
-    syncButton.disabled = true;
-    refreshButton.disabled = true;
+    setSyncInProgress(true);
     statusEl.textContent = 'Syncing…';
     vscode.postMessage({ type: 'sync', baseHead: model.head, changes: [...edits.values()] });
   });
@@ -616,11 +625,12 @@ function getWebviewHtml(webview) {
     if (message.type === 'history') {
       model = message;
       edits.clear();
-      refreshButton.disabled = false;
+      refreshButton.disabled = syncInProgress;
       render();
     } else if (message.type === 'syncProgress') {
       statusEl.textContent = message.message || 'Syncing…';
     } else if (message.type === 'syncDone') {
+      setSyncInProgress(false);
       if (message.commits) {
         model = message;
         edits.clear();
@@ -630,6 +640,7 @@ function getWebviewHtml(webview) {
       refreshButton.disabled = false;
       updateToolbar();
     } else if (message.type === 'syncError') {
+      setSyncInProgress(false);
       statusEl.textContent = message.message || 'Sync failed.';
       refreshButton.disabled = false;
       updateToolbar();
@@ -654,5 +665,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, getCommitMetadata, git }
+  _test: { splitMessage, joinMessage, rewriteDates, runHistoryReword, getCommitMetadata, git, getWebviewHtml }
 };
