@@ -214,6 +214,13 @@ async function rewriteDates(cwd, dateChanges) {
     throw new Error('Timestamp editing currently supports linear history only.');
   }
 
+  for (const commit of slice) {
+    const headers = await getUnpreservedCommitHeaders(cwd, commit.hash);
+    if (headers.length > 0) {
+      throw new Error(`Timestamp rewrite cannot preserve ${headers[0]} header on commit ${commit.hash}.`);
+    }
+  }
+
   const oldestFirst = [...slice].reverse();
   let rewrittenParent = null;
 
@@ -340,6 +347,19 @@ async function getCommitMessage(cwd, rev) {
   const separator = raw.indexOf(Buffer.from('\n\n'));
   if (separator === -1) throw new Error(`Commit ${rev} has no message separator.`);
   return raw.slice(separator + 2);
+}
+
+async function getUnpreservedCommitHeaders(cwd, rev) {
+  const raw = await git(cwd, ['cat-file', 'commit', rev], 8 * 1024 * 1024, { encoding: 'buffer' });
+  const separator = raw.indexOf(Buffer.from('\n\n'));
+  if (separator === -1) throw new Error(`Commit ${rev} has no message separator.`);
+
+  return raw.slice(0, separator)
+    .toString('ascii')
+    .split(/\r?\n/)
+    .map(line => line.match(/^([A-Za-z][A-Za-z0-9-]*)\s/))
+    .map(match => match && match[1])
+    .filter(name => name === 'encoding' || name === 'mergetag' || /^gpgsig(?:-.+)?$/.test(name));
 }
 
 function splitMessage(message) {
