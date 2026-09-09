@@ -23,11 +23,6 @@
           "light": "media/reword.svg",
           "dark": "media/reword.svg"
         }
-      },
-      {
-        "command": "gitHistoryReword.reword",
-        "title": "Open History Editor",
-        "category": "Git History Reword"
       }
     ],
     "menus": {

@@ -14,8 +14,7 @@ const openingPanels = new Map();
 
 function activate(context) {
   context.subscriptions.push(
-    vscode.commands.registerCommand('gitHistoryReword.open', openHistoryEditor),
-    vscode.commands.registerCommand('gitHistoryReword.reword', openHistoryEditor)
+    vscode.commands.registerCommand('gitHistoryReword.open', openHistoryEditor)
   );
 }
 
