@@ -460,6 +460,12 @@ async function createEditor(tempDir, messagePath) {
   return `sh "${editorPath.replace(/"/g, '\\"')}"`;
 }
 
+function getGitExecutable() {
+  const configuration = vscode.workspace?.getConfiguration?.('git');
+  const configuredPath = configuration?.get?.('path');
+  return typeof configuredPath === 'string' && configuredPath.trim() ? configuredPath.trim() : 'git';
+}
+
 function git(cwd, args, maxBuffer = 4 * 1024 * 1024, options = {}) {
   return new Promise((resolve, reject) => {
     const encoding = options.encoding === 'buffer' ? null : options.encoding;
@@ -472,7 +478,7 @@ function git(cwd, args, maxBuffer = 4 * 1024 * 1024, options = {}) {
     if (encoding !== undefined) execOptions.encoding = encoding;
 
     const child = cp.execFile(
-      'git',
+      getGitExecutable(),
       args,
       execOptions,
       (error, stdout, stderr) => {
