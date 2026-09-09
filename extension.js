@@ -155,11 +155,6 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     return;
   }
 
-  const currentHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
-  if (currentHead !== baseHead) {
-    throw new Error('Git history changed after this list was loaded. Refresh before Sync.');
-  }
-
   const normalized = changes
     .map(change => ({
       index: Number(change.index),
@@ -170,6 +165,16 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     }))
     .filter(change => Number.isInteger(change.index) && change.index >= 0)
     .sort((a, b) => b.index - a.index);
+
+  const outOfRange = normalized.find(change => change.index >= MAX_COMMITS);
+  if (outOfRange) {
+    throw new Error(`Commit index ${outOfRange.index} is outside the displayed history range (0-${MAX_COMMITS - 1}).`);
+  }
+
+  const currentHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
+  if (currentHead !== baseHead) {
+    throw new Error('Git history changed after this list was loaded. Refresh before Sync.');
+  }
 
   for (const change of normalized) {
     if (change.subject !== undefined && change.subject.length === 0) {
