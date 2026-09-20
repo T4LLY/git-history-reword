@@ -64,12 +64,16 @@ class Element {
     this.children = [];
     if (!value.includes('data-index')) return;
     const indexes = [...value.matchAll(/data-index="(\d+)"/g)];
+    const inputTags = [...value.matchAll(/<input class="cell-input (message-input|time-input)"[^>]*value="([^"]*)"/g)];
+    let inputIndex = 0;
     for (const match of indexes) {
       const row = new Element('', 'row');
       row.dataset.index = match[1];
       row.parent = this;
       for (const className of ['message-input', 'time-input']) {
         const input = new Element('', `cell-input ${className}`);
+        input.value = inputTags[inputIndex]?.[2] || '';
+        inputIndex += 1;
         input.parent = row;
         row.children.push(input);
       }
@@ -109,7 +113,7 @@ function createWebview(options = {}) {
     head: 'head',
     commits: [{ index: 0, shortHash: 'abc1234', subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0, pushed: options.pushed === true }]
   });
-  return { document, messages, send };
+  return { document, messages, send, context, html };
 }
 
 test('sync disables editable inputs and restores them after sync failure or completion', () => {
@@ -167,4 +171,38 @@ test('sync preview lists changes and warns before rewriting pushed history', () 
   webview.document.elements.get('cancelSync').dispatch('click');
   assert.equal(preview.hidden, true);
   assert.equal(webview.messages.filter(message => message.type === 'sync').length, 0);
+});
+
+
+test('timestamp editor uses an explicit 24-hour local format', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+  assert.match(timeInput.value, /^2020-01-01 (?:[01]\d|2[0-3]):00:00$/);
+  assert.doesNotMatch(timeInput.value, /AM|PM/i);
+  assert.match(webview.html, /placeholder=\"YYYY-MM-DD HH:mm:ss\"/);
+  assert.doesNotMatch(webview.html, /type=\"datetime-local\"/);
+
+  const local = new Date(2026, 8, 18, 17, 15, 32);
+  assert.equal(webview.context.dateToLocalInput(local.toISOString()), '2026-09-18 17:15:32');
+  assert.match(webview.context.localInputToIsoOffset('2026-09-18 17:15:32'), /^2026-09-18T17:15:32[+-]\d{2}:\d{2}$/);
+});
+
+test('invalid 24-hour timestamps block Sync until corrected', () => {
+  const webview = createWebview();
+  const row = webview.document.elements.get('rows').children[0];
+  const messageInput = row.children[0];
+  const timeInput = row.children[1];
+
+  messageInput.value = 'new';
+  messageInput.dispatch('input');
+  assert.equal(webview.document.elements.get('sync').disabled, false);
+
+  timeInput.value = '2020-01-01 13:99:00';
+  timeInput.dispatch('input');
+  assert.equal(webview.document.elements.get('sync').disabled, true);
+  assert.match(webview.document.elements.get('status').textContent, /invalid timestamp/);
+
+  timeInput.value = '2020-01-01 23:59:00';
+  timeInput.dispatch('input');
+  assert.equal(webview.document.elements.get('sync').disabled, false);
 });

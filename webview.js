@@ -41,7 +41,7 @@ function getWebviewHtml(webview) {
   .row.dirty .dot { background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
   .row.date-mismatch .time .time-input { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
   .row.date-mismatch .restore-date { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
-  .row.chronology-error .time .time-input { color: var(--vscode-editorError-foreground, #f14c4c); border-color: var(--vscode-editorError-foreground, #f14c4c); }
+  .row.chronology-error .time .time-input, .row.time-invalid .time .time-input { color: var(--vscode-editorError-foreground, #f14c4c); border-color: var(--vscode-editorError-foreground, #f14c4c); }
   .row.merge { opacity: .55; }
   .row.merge input { cursor: not-allowed; }
   .empty { padding: 28px; opacity: .7; }
@@ -100,6 +100,7 @@ function getWebviewHtml(webview) {
   const edits = new Map();
   let syncInProgress = false;
   let chronologyConflictCount = 0;
+  let invalidTimeCount = 0;
   const rowsEl = document.getElementById('rows');
   const syncButton = document.getElementById('sync');
   const refreshButton = document.getElementById('refresh');
@@ -120,18 +121,28 @@ function getWebviewHtml(webview) {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
     const pad = n => String(n).padStart(2, '0');
-    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + 'T' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+  }
+
+  function parseLocalDateTime(value) {
+    const match = /^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})$/.exec(String(value || '').trim());
+    if (!match) return null;
+    const [, y, m, d, hh, mm, ss] = match.map(Number);
+    const date = new Date(y, m - 1, d, hh, mm, ss, 0);
+    if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d ||
+        date.getHours() !== hh || date.getMinutes() !== mm || date.getSeconds() !== ss) return null;
+    return date;
   }
 
   function localInputToIsoOffset(value) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
+    const date = parseLocalDateTime(value);
+    if (!date) return '';
     const pad = n => String(Math.abs(n)).padStart(2, '0');
     const offsetMinutes = -date.getTimezoneOffset();
     const sign = offsetMinutes >= 0 ? '+' : '-';
     const oh = pad(Math.trunc(Math.abs(offsetMinutes) / 60));
     const om = pad(Math.abs(offsetMinutes) % 60);
-    return value + sign + oh + ':' + om;
+    return value.trim().replace(' ', 'T') + sign + oh + ':' + om;
   }
 
   function render() {
@@ -159,7 +170,7 @@ function getWebviewHtml(webview) {
       return '<div class="row' + mergeClass + pushedClass + mismatchClass + '" data-index="' + commit.index + '">' +
         '<div class="graph"><span class="dot"></span></div>' +
         '<div class="message"><input class="cell-input message-input" ' + messageDisabled + ' value="' + escapeHtml(commit.subject) + '" title="Edit commit message"></div>' +
-        '<div class="time"><input class="cell-input time-input" type="datetime-local" step="1" ' + timeDisabled + ' value="' + escapeHtml(dateToLocalInput(commit.authorDate)) + '" title="Changes both Author Date and Committer Date">' + restore + '</div>' +
+        '<div class="time"><input class="cell-input time-input" type="text" inputmode="numeric" spellcheck="false" placeholder="YYYY-MM-DD HH:mm:ss" ' + timeDisabled + ' value="' + escapeHtml(dateToLocalInput(commit.authorDate)) + '" title="24-hour local time. Changes both Author Date and Committer Date">' + restore + '</div>' +
         '<div class="hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.shortHash) + '</div>' +
       '</div>';
     }).join('');
@@ -197,7 +208,7 @@ function getWebviewHtml(webview) {
   function readRowTime(row) {
     if (!row) return NaN;
     const value = row.querySelector('.time-input')?.value || '';
-    return new Date(value).getTime();
+    return parseLocalDateTime(value)?.getTime() ?? NaN;
   }
 
   function updateChronology() {
@@ -205,8 +216,16 @@ function getWebviewHtml(webview) {
     const rowByIndex = new Map(rows.map(row => [Number(row.dataset.index), row]));
     const conflictRows = new Set();
     let conflicts = 0;
+    let invalidTimes = 0;
 
-    for (const row of rows) row.classList.remove('chronology-error');
+    for (const row of rows) {
+      row.classList.remove('chronology-error');
+      row.classList.remove('time-invalid');
+      if (!Number.isFinite(readRowTime(row))) {
+        row.classList.add('time-invalid');
+        invalidTimes += 1;
+      }
+    }
 
     for (let childIndex = 0; childIndex < model.commits.length; childIndex += 1) {
       const childRow = rowByIndex.get(childIndex);
@@ -227,10 +246,13 @@ function getWebviewHtml(webview) {
 
     for (const index of conflictRows) rowByIndex.get(index)?.classList.add('chronology-error');
     chronologyConflictCount = conflicts;
+    invalidTimeCount = invalidTimes;
     if (!syncInProgress) {
-      statusEl.textContent = conflicts > 0
-        ? conflicts + ' chronological conflict' + (conflicts === 1 ? '' : 's') + ' — fix the red timestamps before Sync.'
-        : '';
+      statusEl.textContent = invalidTimes > 0
+        ? invalidTimes + ' invalid timestamp' + (invalidTimes === 1 ? '' : 's') + ' — use YYYY-MM-DD HH:mm:ss.'
+        : conflicts > 0
+          ? conflicts + ' chronological conflict' + (conflicts === 1 ? '' : 's') + ' — fix the red timestamps before Sync.'
+          : '';
     }
   }
 
@@ -308,7 +330,7 @@ function getWebviewHtml(webview) {
   }
 
   function openSyncPreview() {
-    if (!model || edits.size === 0 || chronologyConflictCount > 0 || syncInProgress) return;
+    if (!model || edits.size === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0 || syncInProgress) return;
     renderSyncPreview();
     previewEl.hidden = false;
     confirmSyncButton.focus?.();
@@ -319,7 +341,7 @@ function getWebviewHtml(webview) {
   }
 
   function startSync() {
-    if (!model || edits.size === 0 || chronologyConflictCount > 0 || syncInProgress) return;
+    if (!model || edits.size === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0 || syncInProgress) return;
     closeSyncPreview();
     setSyncInProgress(true);
     statusEl.textContent = 'Syncing…';
@@ -329,7 +351,7 @@ function getWebviewHtml(webview) {
   function updateToolbar() {
     const count = edits.size;
     countEl.textContent = count + ' changed';
-    syncButton.disabled = syncInProgress || count === 0 || chronologyConflictCount > 0;
+    syncButton.disabled = syncInProgress || count === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0;
   }
 
   function setSyncInProgress(value) {
@@ -339,7 +361,7 @@ function getWebviewHtml(webview) {
       const mismatchLocked = control.classList.contains('time-input') && row.classList.contains('date-mismatch');
       control.disabled = value || row.classList.contains('merge') || mismatchLocked;
     });
-    syncButton.disabled = value || edits.size === 0 || chronologyConflictCount > 0;
+    syncButton.disabled = value || edits.size === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0;
     refreshButton.disabled = value;
   }
 
