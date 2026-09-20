@@ -21,3 +21,18 @@ test('L2 comparison ignores subject-only whitespace and counts actual changes on
 
   assert.deepEqual(changes.map(change => change.index), [1, 0]);
 });
+
+
+test('date normalization is effective even when the selected time equals Author Date', () => {
+  const change = {
+    index: 0,
+    subject: undefined,
+    originalSubject: 'same',
+    time: '2026-09-09T11:00:00+00:00',
+    originalTime: '2026-09-09T11:00:00+00:00',
+    normalizeDates: true
+  };
+
+  assert.deepEqual(extensionTest.getEffectiveChanges([change]).map(item => item.index), [0]);
+  assert.deepEqual(extensionTest.getDateChanges([change]).map(item => item.index), [0]);
+});

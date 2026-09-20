@@ -185,8 +185,13 @@ function getEffectiveChanges(changes) {
   return changes.filter(change => {
     const subjectChanged = change.subject !== undefined && change.subject !== change.originalSubject.trim();
     const timeChanged = change.time !== undefined && change.time !== change.originalTime;
-    return subjectChanged || timeChanged;
+    return subjectChanged || timeChanged || change.normalizeDates === true;
   });
+}
+
+function getDateChanges(changes) {
+  return changes.filter(change =>
+    change.normalizeDates === true || (change.time && change.time !== change.originalTime));
 }
 
 async function syncChanges(panel, cwd, baseHead, changes) {
@@ -201,7 +206,8 @@ async function syncChanges(panel, cwd, baseHead, changes) {
       subject: typeof change.subject === 'string' ? change.subject.trim() : undefined,
       originalSubject: typeof change.originalSubject === 'string' ? change.originalSubject : '',
       time: typeof change.time === 'string' && change.time.length > 0 ? change.time : undefined,
-      originalTime: typeof change.originalTime === 'string' ? change.originalTime : undefined
+      originalTime: typeof change.originalTime === 'string' ? change.originalTime : undefined,
+      normalizeDates: change.normalizeDates === true
     }))
     .filter(change => Number.isInteger(change.index) && change.index >= 0)
     .sort((a, b) => b.index - a.index);
@@ -225,6 +231,9 @@ async function syncChanges(panel, cwd, baseHead, changes) {
   for (const change of effectiveChanges) {
     if (change.subject !== undefined && change.subject.length === 0) {
       throw new Error(`Commit HEAD~${change.index}: commit message cannot be empty.`);
+    }
+    if (change.normalizeDates && !change.time) {
+      throw new Error(`Commit HEAD~${change.index}: date normalization requires the Author Date.`);
     }
   }
 
@@ -258,7 +267,7 @@ async function syncChanges(panel, cwd, baseHead, changes) {
       expectedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
     }
 
-    const dateChanges = effectiveChanges.filter(change => change.time && change.time !== change.originalTime);
+    const dateChanges = getDateChanges(effectiveChanges);
     if (dateChanges.length > 0) {
       const observedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
       if (observedHead !== expectedHead) {
@@ -579,5 +588,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { splitMessage, joinMessage, loadHistory, syncChanges, getEffectiveChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml, openHistoryEditor }
+  _test: { splitMessage, joinMessage, loadHistory, syncChanges, getEffectiveChanges, getDateChanges, rewriteDates, runHistoryReword, assertLinearAffectedHistory, getCommitMetadata, git, getWebviewHtml, openHistoryEditor }
 };

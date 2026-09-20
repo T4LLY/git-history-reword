@@ -22,7 +22,7 @@ function getWebviewHtml(webview) {
   button:hover { background: var(--vscode-button-hoverBackground); }
   button.secondary { color: var(--vscode-foreground); background: transparent; border-color: var(--vscode-button-secondaryBackground); }
   button:disabled { opacity: .45; cursor: default; }
-  .header, .row { display: grid; grid-template-columns: 34px minmax(340px, 1fr) 194px 82px; align-items: center; min-height: 30px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .header, .row { display: grid; grid-template-columns: 34px minmax(340px, 1fr) 258px 82px; align-items: center; min-height: 30px; border-bottom: 1px solid var(--vscode-panel-border); }
   .header { position: sticky; top: 44px; z-index: 9; min-height: 28px; background: var(--vscode-editor-background); font-size: 11px; font-weight: 600; opacity: .8; }
   .header > div, .row > div { padding: 3px 8px; min-width: 0; }
   .graph { position: relative; height: 100%; min-height: 30px; }
@@ -33,9 +33,14 @@ function getWebviewHtml(webview) {
   .cell-input { width: 100%; height: 25px; padding: 2px 4px; border: 1px solid transparent; outline: none; background: transparent; color: inherit; font: inherit; }
   .cell-input:hover { border-color: var(--vscode-input-border, transparent); }
   .cell-input:focus { border-color: var(--vscode-focusBorder); background: var(--vscode-input-background); }
+  .time { display: flex; align-items: center; gap: 4px; }
+  .time-input { min-width: 0; }
+  .restore-date { flex: 0 0 auto; padding: 3px 7px; font-size: 11px; }
   .hash { opacity: .62; font-family: var(--vscode-editor-font-family); }
   .row.dirty .message input, .row.dirty .time input, .row.dirty .hash { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
   .row.dirty .dot { background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
+  .row.date-mismatch .time .time-input { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
+  .row.date-mismatch .restore-date { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
   .row.merge { opacity: .55; }
   .row.merge input { cursor: not-allowed; }
   .empty { padding: 28px; opacity: .7; }
@@ -101,13 +106,20 @@ function getWebviewHtml(webview) {
     }
 
     rowsEl.innerHTML = model.commits.map(commit => {
-      const disabled = commit.parentCount > 1 || syncInProgress ? 'disabled' : '';
-      const mergeClass = commit.parentCount > 1 ? ' merge' : '';
+      const merge = commit.parentCount > 1;
+      const dateMismatch = commit.authorDate !== commit.committerDate;
+      const messageDisabled = merge || syncInProgress ? 'disabled' : '';
+      const timeDisabled = merge || syncInProgress || dateMismatch ? 'disabled' : '';
+      const mergeClass = merge ? ' merge' : '';
       const pushedClass = commit.pushed ? ' pushed' : '';
-      return '<div class="row' + mergeClass + pushedClass + '" data-index="' + commit.index + '">' +
+      const mismatchClass = dateMismatch ? ' date-mismatch' : '';
+      const restore = dateMismatch
+        ? '<button class="secondary restore-date" ' + (merge || syncInProgress ? 'disabled' : '') + ' title="Set Committer Date to Author Date">Restore</button>'
+        : '';
+      return '<div class="row' + mergeClass + pushedClass + mismatchClass + '" data-index="' + commit.index + '">' +
         '<div class="graph"><span class="dot"></span></div>' +
-        '<div class="message"><input class="cell-input message-input" ' + disabled + ' value="' + escapeHtml(commit.subject) + '" title="Edit commit message"></div>' +
-        '<div class="time"><input class="cell-input time-input" type="datetime-local" step="1" ' + disabled + ' value="' + escapeHtml(dateToLocalInput(commit.authorDate)) + '" title="Changes both Author Date and Committer Date"></div>' +
+        '<div class="message"><input class="cell-input message-input" ' + messageDisabled + ' value="' + escapeHtml(commit.subject) + '" title="Edit commit message"></div>' +
+        '<div class="time"><input class="cell-input time-input" type="datetime-local" step="1" ' + timeDisabled + ' value="' + escapeHtml(dateToLocalInput(commit.authorDate)) + '" title="Changes both Author Date and Committer Date">' + restore + '</div>' +
         '<div class="hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.shortHash) + '</div>' +
       '</div>';
     }).join('');
@@ -117,9 +129,26 @@ function getWebviewHtml(webview) {
       const commit = model.commits[index];
       const messageInput = row.querySelector('.message-input');
       const timeInput = row.querySelector('.time-input');
+      const restoreButton = row.querySelector('.restore-date');
       const onChange = () => updateEdit(index, commit, row, messageInput, timeInput);
       messageInput.addEventListener('input', onChange);
       timeInput.addEventListener('input', onChange);
+      restoreButton?.addEventListener('click', () => {
+        const existing = edits.get(index) || {};
+        edits.set(index, {
+          ...existing,
+          index,
+          originalSubject: commit.subject,
+          originalTime: commit.authorDate,
+          time: commit.authorDate,
+          normalizeDates: true
+        });
+        row.classList.remove('date-mismatch');
+        row.classList.add('dirty');
+        restoreButton.hidden = true;
+        timeInput.disabled = syncInProgress || commit.parentCount > 1;
+        updateEdit(index, commit, row, messageInput, timeInput);
+      });
     });
     updateToolbar();
   }
@@ -131,8 +160,9 @@ function getWebviewHtml(webview) {
     const timeLocal = timeInput.value;
     const subjectChanged = subject !== originalSubject;
     const timeChanged = timeLocal !== originalLocal;
+    const normalizeDates = edits.get(index)?.normalizeDates === true;
 
-    if (!subjectChanged && !timeChanged) {
+    if (!subjectChanged && !timeChanged && !normalizeDates) {
       edits.delete(index);
       row.classList.remove('dirty');
     } else {
@@ -141,7 +171,8 @@ function getWebviewHtml(webview) {
         originalSubject: commit.subject,
         subject: subjectChanged ? subject : undefined,
         originalTime: commit.authorDate,
-        time: timeChanged ? localInputToIsoOffset(timeLocal) : undefined
+        time: timeChanged ? localInputToIsoOffset(timeLocal) : (normalizeDates ? commit.authorDate : undefined),
+        normalizeDates
       });
       row.classList.add('dirty');
     }
@@ -156,8 +187,10 @@ function getWebviewHtml(webview) {
 
   function setSyncInProgress(value) {
     syncInProgress = value;
-    rowsEl.querySelectorAll('.message-input, .time-input').forEach(input => {
-      input.disabled = value || input.closest('.row').classList.contains('merge');
+    rowsEl.querySelectorAll('.message-input, .time-input, .restore-date').forEach(control => {
+      const row = control.closest('.row');
+      const mismatchLocked = control.classList.contains('time-input') && row.classList.contains('date-mismatch');
+      control.disabled = value || row.classList.contains('merge') || mismatchLocked;
     });
     syncButton.disabled = value || edits.size === 0;
     refreshButton.disabled = value;

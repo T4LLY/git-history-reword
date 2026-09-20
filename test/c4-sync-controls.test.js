@@ -105,7 +105,7 @@ function createWebview() {
     repoName: 'repo',
     branch: 'main',
     head: 'head',
-    commits: [{ index: 0, subject: 'old', authorDate: '2020-01-01T00:00:00Z', parentCount: 0 }]
+    commits: [{ index: 0, subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0 }]
   });
   return { document, messages, send };
 }
