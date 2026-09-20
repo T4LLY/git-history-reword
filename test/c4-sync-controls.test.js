@@ -22,7 +22,14 @@ class Element {
     this.disabled = false;
     this.value = '';
     this.dataset = {};
+    this.selectionStart = 0;
+    this.selectionEnd = 0;
     this._html = '';
+  }
+
+  setSelectionRange(start, end) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
   }
 
   addEventListener(type, listener) {
@@ -185,6 +192,29 @@ test('timestamp editor uses an explicit 24-hour local format', () => {
   const local = new Date(2026, 8, 18, 17, 15, 32);
   assert.equal(webview.context.dateToLocalInput(local.toISOString()), '2026-09-18 17:15:32');
   assert.match(webview.context.localInputToIsoOffset('2026-09-18 17:15:32'), /^2026-09-18T17:15:32[+-]\d{2}:\d{2}$/);
+});
+
+test('timestamp editor selects only the active date or time segment', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+
+  timeInput.selectionStart = 2;
+  timeInput.selectionEnd = 2;
+  timeInput.dispatch('click');
+  assert.equal(timeInput.selectionStart, 0);
+  assert.equal(timeInput.selectionEnd, 4);
+
+  timeInput.selectionStart = 12;
+  timeInput.selectionEnd = 12;
+  timeInput.dispatch('click');
+  assert.equal(timeInput.selectionStart, 11);
+  assert.equal(timeInput.selectionEnd, 13);
+
+  timeInput.selectionStart = 14;
+  timeInput.selectionEnd = 16;
+  timeInput.dispatch('click');
+  assert.equal(timeInput.selectionStart, 14);
+  assert.equal(timeInput.selectionEnd, 16);
 });
 
 test('invalid 24-hour timestamps block Sync until corrected', () => {

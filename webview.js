@@ -136,6 +136,24 @@ function getWebviewHtml(webview) {
     return date;
   }
 
+  const timestampSegments = [
+    [0, 4],
+    [5, 7],
+    [8, 10],
+    [11, 13],
+    [14, 16],
+    [17, 19]
+  ];
+
+  function selectTimestampSegment(input) {
+    if (!input || typeof input.setSelectionRange !== 'function') return;
+    if (input.selectionStart !== input.selectionEnd) return;
+    const caret = input.selectionStart ?? 0;
+    const segment = timestampSegments.find(([start, end]) => caret >= start && caret <= end);
+    if (!segment) return;
+    input.setSelectionRange(segment[0], segment[1]);
+  }
+
   function localInputToIsoOffset(value) {
     const date = parseLocalDateTime(value);
     if (!date) return '';
@@ -195,6 +213,8 @@ function getWebviewHtml(webview) {
       const onChange = () => updateEdit(index, commit, row, messageInput, timeInput);
       messageInput.addEventListener('input', onChange);
       timeInput.addEventListener('input', onChange);
+      timeInput.addEventListener('focus', () => selectTimestampSegment(timeInput));
+      timeInput.addEventListener('click', () => selectTimestampSegment(timeInput));
       restoreButton?.addEventListener('click', () => {
         const existing = edits.get(index) || {};
         edits.set(index, {
