@@ -29,7 +29,9 @@ function getWebviewHtml(webview) {
   .graph::before { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 2px; background: var(--vscode-editorIndentGuide-background); }
   .dot { position: absolute; left: 12px; top: 50%; width: 10px; height: 10px; transform: translateY(-50%); border-radius: 50%; background: var(--vscode-focusBorder); border: 2px solid var(--vscode-editor-background); }
   .row.pushed .dot { background: var(--vscode-scmGraph-historyItemRemoteRefColor, var(--vscode-scmGraph-foreground2, var(--vscode-focusBorder))); }
-  .row:first-of-type .graph::before { top: 50%; }
+  .row.first-row .graph::before { top: 50%; }
+  .date-header { position: relative; min-height: 24px; display: flex; align-items: center; padding: 4px 12px 4px 42px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBarSectionHeader-background, var(--vscode-editor-background)); color: var(--vscode-descriptionForeground, var(--vscode-foreground)); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+  .date-header:not(.first-date-header)::before { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 2px; background: var(--vscode-editorIndentGuide-background); }
   .cell-input { width: 100%; height: 25px; padding: 2px 4px; border: 1px solid transparent; outline: none; background: transparent; color: inherit; font: inherit; }
   .cell-input:hover { border-color: var(--vscode-input-border, transparent); }
   .cell-input:focus { border-color: var(--vscode-focusBorder); background: var(--vscode-input-background); }
@@ -156,21 +158,30 @@ function getWebviewHtml(webview) {
       return;
     }
 
-    rowsEl.innerHTML = model.commits.map(commit => {
+    let previousDate = '';
+    rowsEl.innerHTML = model.commits.map((commit, position) => {
+      const localTime = dateToLocalInput(commit.authorDate);
+      const localDate = localTime.slice(0, 10);
+      const dateHeader = localDate && localDate !== previousDate
+        ? '<div class="date-header' + (position === 0 ? ' first-date-header' : '') + '">' + escapeHtml(localDate) + '</div>'
+        : '';
+      previousDate = localDate;
+
       const merge = commit.parentCount > 1;
       const dateMismatch = commit.authorDate !== commit.committerDate;
       const messageDisabled = merge || syncInProgress ? 'disabled' : '';
       const timeDisabled = merge || syncInProgress || dateMismatch ? 'disabled' : '';
+      const firstClass = position === 0 ? ' first-row' : '';
       const mergeClass = merge ? ' merge' : '';
       const pushedClass = commit.pushed ? ' pushed' : '';
       const mismatchClass = dateMismatch ? ' date-mismatch' : '';
       const restore = dateMismatch
         ? '<button class="secondary restore-date" ' + (merge || syncInProgress ? 'disabled' : '') + ' title="Set Committer Date to Author Date">Restore</button>'
         : '';
-      return '<div class="row' + mergeClass + pushedClass + mismatchClass + '" data-index="' + commit.index + '">' +
+      return dateHeader + '<div class="row' + firstClass + mergeClass + pushedClass + mismatchClass + '" data-index="' + commit.index + '">' +
         '<div class="graph"><span class="dot"></span></div>' +
         '<div class="message"><input class="cell-input message-input" ' + messageDisabled + ' value="' + escapeHtml(commit.subject) + '" title="Edit commit message"></div>' +
-        '<div class="time"><input class="cell-input time-input" type="text" inputmode="numeric" spellcheck="false" placeholder="YYYY-MM-DD HH:mm:ss" ' + timeDisabled + ' value="' + escapeHtml(dateToLocalInput(commit.authorDate)) + '" title="24-hour local time. Changes both Author Date and Committer Date">' + restore + '</div>' +
+        '<div class="time"><input class="cell-input time-input" type="text" inputmode="numeric" spellcheck="false" placeholder="YYYY-MM-DD HH:mm:ss" ' + timeDisabled + ' value="' + escapeHtml(localTime) + '" title="24-hour local time. Changes both Author Date and Committer Date">' + restore + '</div>' +
         '<div class="hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.shortHash) + '</div>' +
       '</div>';
     }).join('');

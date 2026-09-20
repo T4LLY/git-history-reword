@@ -111,7 +111,7 @@ function createWebview(options = {}) {
     repoName: 'repo',
     branch: 'main',
     head: 'head',
-    commits: [{ index: 0, shortHash: 'abc1234', subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0, pushed: options.pushed === true }]
+    commits: options.commits || [{ index: 0, shortHash: 'abc1234', subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0, pushed: options.pushed === true }]
   });
   return { document, messages, send, context, html };
 }
@@ -205,4 +205,25 @@ test('invalid 24-hour timestamps block Sync until corrected', () => {
   timeInput.value = '2020-01-01 23:59:00';
   timeInput.dispatch('input');
   assert.equal(webview.document.elements.get('sync').disabled, false);
+});
+
+
+test('history inserts local date headers when the commit date changes', () => {
+  const localIso = (day, hour) => new Date(2026, 8, day, hour, 0, 0).toISOString();
+  const commits = [
+    { index: 0, shortHash: 'aaa0000', subject: 'newest', authorDate: localIso(20, 12), committerDate: localIso(20, 12), parentCount: 1, pushed: false },
+    { index: 1, shortHash: 'bbb1111', subject: 'same day', authorDate: localIso(20, 10), committerDate: localIso(20, 10), parentCount: 1, pushed: false },
+    { index: 2, shortHash: 'ccc2222', subject: 'previous day', authorDate: localIso(19, 23), committerDate: localIso(19, 23), parentCount: 0, pushed: false }
+  ];
+  const webview = createWebview({ commits });
+  const markup = webview.document.elements.get('rows').innerHTML;
+
+  assert.equal((markup.match(/class="date-header(?: first-date-header)?"/g) || []).length, 2);
+  assert.match(markup, /<div class="date-header first-date-header">2026-09-20<\/div>/);
+  assert.match(markup, /<div class="date-header">2026-09-19<\/div>/);
+  assert.ok(markup.indexOf('2026-09-20') < markup.indexOf('data-index="0"'));
+  assert.ok(markup.indexOf('2026-09-19') < markup.indexOf('data-index="2"'));
+  assert.match(markup, /class="row first-row" data-index="0"/);
+  assert.match(webview.html, /\.row\.first-row \.graph::before/);
+  assert.match(webview.html, /\.date-header:not\(\.first-date-header\)::before/);
 });
