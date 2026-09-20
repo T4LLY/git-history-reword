@@ -2,7 +2,7 @@
   "name": "git-history-reword",
   "displayName": "Git History Reword",
   "description": "Edit commit messages and timestamps in a lightweight staged Git history view.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "local",
   "license": "MIT",
   "engines": {
