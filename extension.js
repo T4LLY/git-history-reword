@@ -8,6 +8,7 @@ const path = require('path');
 const util = require('util');
 const { getWebviewHtml } = require('./webview');
 const { assertChronologicalHistory } = require('./chronology');
+const { rewriteDates: rewriteCommitDates, getCommitMetadata: readCommitMetadata } = require('./history-rewrite');
 
 const execFile = util.promisify(cp.execFile);
 const MAX_COMMITS = 200;
@@ -333,99 +334,11 @@ async function assertLinearAffectedHistory(cwd, changes, head = 'HEAD') {
 }
 
 async function rewriteDates(cwd, dateChanges) {
-  const branchRef = (await git(cwd, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => '')).trim();
-  if (!branchRef) {
-    throw new Error('Timestamp editing requires HEAD to be attached to a local branch.');
-  }
-
-  const maxIndex = Math.max(...dateChanges.map(change => change.index));
-  const edits = new Map(dateChanges.map(change => [change.index, change.time]));
-  const newestFirst = await getCommitMetadata(cwd, maxIndex + 1);
-
-  if (newestFirst.length <= maxIndex) {
-    throw new Error('The selected commit is no longer available while rewriting timestamps.');
-  }
-
-  const oldHead = newestFirst[0].hash;
-  const slice = newestFirst.slice(0, maxIndex + 1);
-  if (slice.some(commit => commit.parents.length > 1)) {
-    throw new Error('Timestamp editing currently supports linear history only.');
-  }
-
-  for (const commit of slice) {
-    const headers = await getUnpreservedCommitHeaders(cwd, commit.hash);
-    if (headers.length > 0) {
-      throw new Error(`Timestamp rewrite cannot preserve ${headers[0]} header on commit ${commit.hash}.`);
-    }
-  }
-
-  const oldestFirst = [...slice].reverse();
-  let rewrittenParent = null;
-
-  for (let offset = 0; offset < oldestFirst.length; offset += 1) {
-    const commit = oldestFirst[offset];
-    const originalIndex = maxIndex - offset;
-    const requestedTime = edits.get(originalIndex);
-    const authorDate = requestedTime || commit.authorDate;
-    const committerDate = requestedTime || commit.committerDate;
-
-    let parent;
-    if (rewrittenParent) {
-      parent = rewrittenParent;
-    } else {
-      parent = commit.parents[0] || null;
-    }
-
-    const args = ['commit-tree', commit.tree];
-    if (parent) args.push('-p', parent);
-
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: commit.authorName,
-      GIT_AUTHOR_EMAIL: commit.authorEmail,
-      GIT_AUTHOR_DATE: authorDate,
-      GIT_COMMITTER_NAME: commit.committerName,
-      GIT_COMMITTER_EMAIL: commit.committerEmail,
-      GIT_COMMITTER_DATE: committerDate
-    };
-
-    const newHash = (await git(cwd, args, 4 * 1024 * 1024, { env, input: commit.message })).trim();
-    if (!/^[0-9a-f]{40,64}$/i.test(newHash)) {
-      throw new Error(`git commit-tree returned an invalid commit id: ${newHash}`);
-    }
-    rewrittenParent = newHash;
-  }
-
-  await git(cwd, ['update-ref', '-m', 'Git History Reword: sync timestamps', branchRef, rewrittenParent, oldHead]);
+  return rewriteCommitDates(git, cwd, dateChanges);
 }
 
 async function getCommitMetadata(cwd, count) {
-  const hashes = (await git(cwd, ['rev-list', '--first-parent', `--max-count=${count}`, 'HEAD']))
-    .split(/\r?\n/)
-    .map(v => v.trim())
-    .filter(Boolean);
-
-  const commits = [];
-  for (const hash of hashes) {
-    const format = '%H%x1f%h%x1f%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI';
-    const header = await git(cwd, ['show', '-s', `--format=${format}`, hash], 1024 * 1024);
-    const [fullHash, shortHash, tree, parentsText, authorName, authorEmail, authorDate, committerName, committerEmail, committerDate] = header.trimEnd().split('\x1f');
-    const message = await getCommitMessage(cwd, hash);
-    commits.push({
-      hash: fullHash,
-      shortHash,
-      tree,
-      parents: parentsText.trim() ? parentsText.trim().split(/\s+/) : [],
-      authorName,
-      authorEmail,
-      authorDate,
-      committerName,
-      committerEmail,
-      committerDate,
-      message
-    });
-  }
-  return commits;
+  return readCommitMetadata(git, cwd, count);
 }
 
 async function createBackupRef(cwd, head) {
@@ -485,19 +398,6 @@ async function getCommitMessage(cwd, rev) {
   const separator = raw.indexOf(Buffer.from('\n\n'));
   if (separator === -1) throw new Error(`Commit ${rev} has no message separator.`);
   return raw.slice(separator + 2);
-}
-
-async function getUnpreservedCommitHeaders(cwd, rev) {
-  const raw = await git(cwd, ['cat-file', 'commit', rev], 8 * 1024 * 1024, { encoding: 'buffer' });
-  const separator = raw.indexOf(Buffer.from('\n\n'));
-  if (separator === -1) throw new Error(`Commit ${rev} has no message separator.`);
-
-  return raw.slice(0, separator)
-    .toString('ascii')
-    .split(/\r?\n/)
-    .map(line => line.match(/^([A-Za-z][A-Za-z0-9-]*)\s/))
-    .map(match => match && match[1])
-    .filter(name => name === 'encoding' || name === 'mergetag' || /^gpgsig(?:-.+)?$/.test(name));
 }
 
 function splitMessage(message) {
