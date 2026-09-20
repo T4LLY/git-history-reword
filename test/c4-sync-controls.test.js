@@ -274,6 +274,75 @@ test('timestamp editor selects only the active date or time segment', () => {
   assert.equal(timeInput.selectionEnd, 16);
 });
 
+test('timestamp editor keeps the clicked segment instead of forcing year on focus', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+
+  timeInput.selectionStart = 0;
+  timeInput.selectionEnd = 0;
+  timeInput.dispatch('focus');
+
+  timeInput.selectionStart = 8;
+  timeInput.selectionEnd = 8;
+  timeInput.dispatch('click');
+  assert.equal(timeInput.selectionStart, 8);
+  assert.equal(timeInput.selectionEnd, 10);
+
+  timeInput.selectionStart = 5;
+  timeInput.selectionEnd = 5;
+  timeInput.dispatch('click');
+  assert.equal(timeInput.selectionStart, 5);
+  assert.equal(timeInput.selectionEnd, 7);
+});
+
+test('timestamp editor zero-pads single digit segment input and advances when complete', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+  let prevented = false;
+
+  timeInput.selectionStart = 14;
+  timeInput.selectionEnd = 16;
+  timeInput.dispatch('keydown', { key: '6', preventDefault: () => { prevented = true; } });
+
+  assert.equal(prevented, true);
+  assert.match(timeInput.value, /:06:00$/);
+  assert.equal(timeInput.selectionStart, 17);
+  assert.equal(timeInput.selectionEnd, 19);
+});
+
+test('timestamp editor combines valid multi-digit segment input before advancing', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+  const press = key => timeInput.dispatch('keydown', { key, preventDefault() {} });
+
+  timeInput.selectionStart = 11;
+  timeInput.selectionEnd = 13;
+  press('1');
+  assert.match(timeInput.value, / 01:00:00$/);
+  assert.equal(timeInput.selectionStart, 11);
+  assert.equal(timeInput.selectionEnd, 13);
+
+  press('7');
+  assert.match(timeInput.value, / 17:00:00$/);
+  assert.equal(timeInput.selectionStart, 14);
+  assert.equal(timeInput.selectionEnd, 16);
+});
+
+test('timestamp editor arrow keys move between segments without editing separators', () => {
+  const webview = createWebview();
+  const timeInput = webview.document.elements.get('rows').children[0].children[1];
+  const press = key => timeInput.dispatch('keydown', { key, preventDefault() {} });
+
+  timeInput.selectionStart = 8;
+  timeInput.selectionEnd = 10;
+  press('ArrowRight');
+  assert.equal(timeInput.selectionStart, 11);
+  assert.equal(timeInput.selectionEnd, 13);
+  press('ArrowLeft');
+  assert.equal(timeInput.selectionStart, 8);
+  assert.equal(timeInput.selectionEnd, 10);
+});
+
 test('invalid 24-hour timestamps block Sync until corrected', () => {
   const webview = createWebview();
   const row = webview.document.elements.get('rows').children[0];

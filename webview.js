@@ -141,21 +141,74 @@ function getWebviewHtml(webview) {
   }
 
   const timestampSegments = [
-    [0, 4],
-    [5, 7],
-    [8, 10],
-    [11, 13],
-    [14, 16],
-    [17, 19]
+    { start: 0, end: 4, width: 4, max: 9999 },
+    { start: 5, end: 7, width: 2, max: 12 },
+    { start: 8, end: 10, width: 2, max: 31 },
+    { start: 11, end: 13, width: 2, max: 23 },
+    { start: 14, end: 16, width: 2, max: 59 },
+    { start: 17, end: 19, width: 2, max: 59 }
   ];
+  const timestampEditState = new WeakMap();
 
-  function selectTimestampSegment(input) {
-    if (!input || typeof input.setSelectionRange !== 'function') return;
-    if (input.selectionStart !== input.selectionEnd) return;
-    const caret = input.selectionStart ?? 0;
-    const segment = timestampSegments.find(([start, end]) => caret >= start && caret <= end);
-    if (!segment) return;
-    input.setSelectionRange(segment[0], segment[1]);
+  function timestampSegmentIndex(input) {
+    const start = input?.selectionStart ?? 0;
+    const end = input?.selectionEnd ?? start;
+    const exact = timestampSegments.findIndex(segment => start === segment.start && end === segment.end);
+    if (exact >= 0) return exact;
+    return timestampSegments.findIndex(segment => start >= segment.start && start <= segment.end);
+  }
+
+  function selectTimestampSegment(input, index = timestampSegmentIndex(input)) {
+    if (!input || typeof input.setSelectionRange !== 'function' || index < 0) return;
+    const segment = timestampSegments[index];
+    timestampEditState.delete(input);
+    input.setSelectionRange(segment.start, segment.end);
+  }
+
+  function moveTimestampSegment(input, index, delta) {
+    const next = Math.max(0, Math.min(timestampSegments.length - 1, index + delta));
+    selectTimestampSegment(input, next);
+  }
+
+  function editTimestampSegment(input, event, onChange) {
+    if (!input || event.ctrlKey || event.metaKey || event.altKey) return;
+    const index = timestampSegmentIndex(input);
+    if (index < 0) return;
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      moveTimestampSegment(input, index, event.key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+
+    if (/^\\d$/.test(event.key)) {
+      event.preventDefault();
+      const segment = timestampSegments[index];
+      const previous = timestampEditState.get(input);
+      let digits = previous?.index === index ? previous.digits + event.key : event.key;
+      if (digits.length > segment.width || Number(digits) > segment.max) digits = event.key;
+
+      const padded = digits.padStart(segment.width, '0');
+      input.value = input.value.slice(0, segment.start) + padded + input.value.slice(segment.end);
+      onChange();
+
+      const canBePrefix = digits.length < segment.width && Number(digits) <= Math.floor(segment.max / 10);
+      if (canBePrefix) {
+        timestampEditState.set(input, { index, digits });
+        input.setSelectionRange(segment.start, segment.end);
+      } else {
+        moveTimestampSegment(input, index, 1);
+      }
+      return;
+    }
+
+    if (event.key === '-' || event.key === ':' || event.key === ' ') {
+      event.preventDefault();
+      moveTimestampSegment(input, index, 1);
+      return;
+    }
+
+    if (event.key.length === 1) event.preventDefault();
   }
 
   function localInputToIsoOffset(value) {
@@ -219,8 +272,8 @@ function getWebviewHtml(webview) {
       const onChange = () => updateEdit(index, commit, row, messageInput, timeInput);
       messageInput.addEventListener('input', onChange);
       timeInput.addEventListener('input', onChange);
-      timeInput.addEventListener('focus', () => selectTimestampSegment(timeInput));
       timeInput.addEventListener('click', () => selectTimestampSegment(timeInput));
+      timeInput.addEventListener('keydown', event => editTimestampSegment(timeInput, event, onChange));
       revertButton?.addEventListener('click', () => revertEdit(index, commit, row, messageInput, timeInput, restoreButton, revertButton));
       restoreButton?.addEventListener('click', () => {
         const existing = edits.get(index) || {};
