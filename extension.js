@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const util = require('util');
 const { getWebviewHtml } = require('./webview');
+const { assertChronologicalHistory } = require('./chronology');
 
 const execFile = util.promisify(cp.execFile);
 const MAX_COMMITS = 200;
@@ -116,7 +117,7 @@ async function loadHistory(cwd) {
     git(cwd, [
       'log',
       '--first-parent',
-      `-n${MAX_COMMITS}`,
+      `-n${MAX_COMMITS + 1}`,
       `--pretty=format:${format}`,
       head
     ], 8 * 1024 * 1024),
@@ -127,23 +128,28 @@ async function loadHistory(cwd) {
     ? await getUnpushedHashes(cwd, head, pushCommit)
     : new Set();
 
-  const commits = stdout
+  const history = stdout
     .split('\x1e')
     .map(record => record.replace(/^\r?\n|\r?\n$/g, ''))
     .filter(Boolean)
-    .map((record, index) => {
+    .map(record => {
       const [hash, shortHash, authorDate, committerDate, subject, parents = ''] = record.split('\x1f');
       return {
-        index,
         hash,
         shortHash,
         authorDate,
         committerDate,
         subject,
-        parentCount: parents.trim() ? parents.trim().split(/\s+/).length : 0,
-        pushed: pushCommit !== null && !unpushedHashes.has(hash)
+        parentCount: parents.trim() ? parents.trim().split(/\s+/).length : 0
       };
     });
+
+  const commits = history.slice(0, MAX_COMMITS).map((commit, index) => ({
+    ...commit,
+    index,
+    parentAuthorDate: history[index + 1]?.authorDate || null,
+    pushed: pushCommit !== null && !unpushedHashes.has(commit.hash)
+  }));
 
   return {
     head,
@@ -237,6 +243,7 @@ async function syncChanges(panel, cwd, baseHead, changes) {
     }
   }
 
+  await assertChronologicalHistory(git, cwd, effectiveChanges, currentHead, MAX_COMMITS);
   const originalHistory = await assertLinearAffectedHistory(cwd, effectiveChanges, currentHead);
   const verifiedHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
   if (verifiedHead !== currentHead) {

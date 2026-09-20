@@ -41,6 +41,7 @@ function getWebviewHtml(webview) {
   .row.dirty .dot { background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
   .row.date-mismatch .time .time-input { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
   .row.date-mismatch .restore-date { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
+  .row.chronology-error .time .time-input { color: var(--vscode-editorError-foreground, #f14c4c); border-color: var(--vscode-editorError-foreground, #f14c4c); }
   .row.merge { opacity: .55; }
   .row.merge input { cursor: not-allowed; }
   .empty { padding: 28px; opacity: .7; }
@@ -66,6 +67,7 @@ function getWebviewHtml(webview) {
   let model = null;
   const edits = new Map();
   let syncInProgress = false;
+  let chronologyConflictCount = 0;
   const rowsEl = document.getElementById('rows');
   const syncButton = document.getElementById('sync');
   const refreshButton = document.getElementById('refresh');
@@ -150,7 +152,48 @@ function getWebviewHtml(webview) {
         updateEdit(index, commit, row, messageInput, timeInput);
       });
     });
+    updateChronology();
     updateToolbar();
+  }
+
+  function readRowTime(row) {
+    if (!row) return NaN;
+    const value = row.querySelector('.time-input')?.value || '';
+    return new Date(value).getTime();
+  }
+
+  function updateChronology() {
+    const rows = Array.from(rowsEl.querySelectorAll('.row'));
+    const rowByIndex = new Map(rows.map(row => [Number(row.dataset.index), row]));
+    const conflictRows = new Set();
+    let conflicts = 0;
+
+    for (const row of rows) row.classList.remove('chronology-error');
+
+    for (let childIndex = 0; childIndex < model.commits.length; childIndex += 1) {
+      const childRow = rowByIndex.get(childIndex);
+      const childTime = readRowTime(childRow);
+      let parentTime;
+
+      if (childIndex + 1 < model.commits.length) {
+        parentTime = readRowTime(rowByIndex.get(childIndex + 1));
+      } else {
+        parentTime = new Date(model.commits[childIndex].parentAuthorDate || '').getTime();
+      }
+
+      if (!Number.isFinite(childTime) || !Number.isFinite(parentTime) || childTime >= parentTime) continue;
+      conflicts += 1;
+      conflictRows.add(childIndex);
+      if (childIndex + 1 < model.commits.length) conflictRows.add(childIndex + 1);
+    }
+
+    for (const index of conflictRows) rowByIndex.get(index)?.classList.add('chronology-error');
+    chronologyConflictCount = conflicts;
+    if (!syncInProgress) {
+      statusEl.textContent = conflicts > 0
+        ? conflicts + ' chronological conflict' + (conflicts === 1 ? '' : 's') + ' — fix the red timestamps before Sync.'
+        : '';
+    }
   }
 
   function updateEdit(index, commit, row, messageInput, timeInput) {
@@ -176,13 +219,14 @@ function getWebviewHtml(webview) {
       });
       row.classList.add('dirty');
     }
+    updateChronology();
     updateToolbar();
   }
 
   function updateToolbar() {
     const count = edits.size;
     countEl.textContent = count + ' changed';
-    syncButton.disabled = syncInProgress || count === 0;
+    syncButton.disabled = syncInProgress || count === 0 || chronologyConflictCount > 0;
   }
 
   function setSyncInProgress(value) {
@@ -192,7 +236,7 @@ function getWebviewHtml(webview) {
       const mismatchLocked = control.classList.contains('time-input') && row.classList.contains('date-mismatch');
       control.disabled = value || row.classList.contains('merge') || mismatchLocked;
     });
-    syncButton.disabled = value || edits.size === 0;
+    syncButton.disabled = value || edits.size === 0 || chronologyConflictCount > 0;
     refreshButton.disabled = value;
   }
 
