@@ -57,6 +57,8 @@ class Element {
   set textContent(value) { this.text = value; }
   get textContent() { return this.text || ''; }
 
+  get innerHTML() { return this._html; }
+
   set innerHTML(value) {
     this._html = value;
     this.children = [];
@@ -77,7 +79,7 @@ class Element {
 }
 
 function createDom() {
-  const elements = new Map(['repo', 'branch', 'status', 'changedCount', 'sync', 'refresh', 'rows']
+  const elements = new Map(['repo', 'branch', 'status', 'changedCount', 'sync', 'refresh', 'rows', 'syncPreview', 'syncPreviewSummary', 'syncPreviewList', 'pushedWarning', 'cancelSync', 'confirmSync']
     .map(id => [id, new Element(id)]));
   elements.get('rows').querySelectorAll = Element.prototype.querySelectorAll;
   return {
@@ -86,7 +88,7 @@ function createDom() {
   };
 }
 
-function createWebview() {
+function createWebview(options = {}) {
   const html = extensionTest.getWebviewHtml({ cspSource: 'vscode-resource:' });
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
   const document = createDom();
@@ -105,7 +107,7 @@ function createWebview() {
     repoName: 'repo',
     branch: 'main',
     head: 'head',
-    commits: [{ index: 0, subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0 }]
+    commits: [{ index: 0, shortHash: 'abc1234', subject: 'old', authorDate: '2020-01-01T00:00:00Z', committerDate: '2020-01-01T00:00:00Z', parentCount: 0, pushed: options.pushed === true }]
   });
   return { document, messages, send };
 }
@@ -120,6 +122,11 @@ test('sync disables editable inputs and restores them after sync failure or comp
   assert.equal(webview.document.elements.get('sync').disabled, false);
 
   webview.document.elements.get('sync').dispatch('click');
+  assert.equal(webview.document.elements.get('syncPreview').hidden, false);
+  assert.equal(messageInput.disabled, false);
+
+  webview.document.elements.get('confirmSync').dispatch('click');
+  assert.equal(webview.document.elements.get('syncPreview').hidden, true);
   assert.equal(messageInput.disabled, true);
   assert.equal(webview.document.elements.get('refresh').disabled, true);
 
@@ -128,8 +135,36 @@ test('sync disables editable inputs and restores them after sync failure or comp
   assert.equal(webview.document.elements.get('refresh').disabled, false);
 
   webview.document.elements.get('sync').dispatch('click');
+  webview.document.elements.get('confirmSync').dispatch('click');
   assert.equal(messageInput.disabled, true);
   webview.send({ type: 'syncDone', message: 'done' });
   assert.equal(messageInput.disabled, false);
   assert.equal(webview.document.elements.get('refresh').disabled, false);
+});
+
+
+test('sync preview lists changes and warns before rewriting pushed history', () => {
+  const webview = createWebview({ pushed: true });
+  const row = webview.document.elements.get('rows').children[0];
+  const messageInput = row.children[0];
+  messageInput.value = 'new subject';
+  messageInput.dispatch('input');
+
+  webview.document.elements.get('sync').dispatch('click');
+
+  const preview = webview.document.elements.get('syncPreview');
+  const warning = webview.document.elements.get('pushedWarning');
+  const list = webview.document.elements.get('syncPreviewList');
+  assert.equal(preview.hidden, false);
+  assert.equal(warning.hidden, false);
+  assert.match(warning.textContent, /Pushed history will be rewritten/);
+  assert.match(list.innerHTML, /preview-badge pushed/);
+  assert.match(list.innerHTML, /Message/);
+  assert.match(list.innerHTML, /old.*new subject/);
+  assert.equal(webview.document.elements.get('confirmSync').textContent, 'Sync pushed history');
+  assert.equal(webview.messages.filter(message => message.type === 'sync').length, 0);
+
+  webview.document.elements.get('cancelSync').dispatch('click');
+  assert.equal(preview.hidden, true);
+  assert.equal(webview.messages.filter(message => message.type === 'sync').length, 0);
 });

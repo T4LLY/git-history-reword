@@ -46,6 +46,24 @@ function getWebviewHtml(webview) {
   .row.merge input { cursor: not-allowed; }
   .empty { padding: 28px; opacity: .7; }
   .changed-count { min-width: 92px; text-align: right; }
+  .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 28px; background: rgba(0, 0, 0, .46); }
+  .modal-backdrop[hidden] { display: none; }
+  .preview-dialog { width: min(760px, 100%); max-height: min(720px, calc(100vh - 56px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); box-shadow: 0 10px 36px rgba(0, 0, 0, .32); }
+  .preview-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .preview-title { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .preview-summary { opacity: .78; }
+  .pushed-warning { margin: 12px 16px 0; padding: 10px 12px; border: 1px solid var(--vscode-editorWarning-foreground, #cca700); border-radius: 4px; color: var(--vscode-editorWarning-foreground, #cca700); background: var(--vscode-inputValidation-warningBackground, transparent); }
+  .preview-list { overflow: auto; padding: 8px 16px 12px; }
+  .preview-item { padding: 10px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+  .preview-item:last-child { border-bottom: 0; }
+  .preview-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .preview-hash { flex: 0 0 auto; opacity: .66; font-family: var(--vscode-editor-font-family); }
+  .preview-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .preview-badge { padding: 1px 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 11px; }
+  .preview-badge.pushed { color: var(--vscode-editorWarning-foreground, #cca700); background: transparent; border: 1px solid currentColor; }
+  .preview-detail { margin-top: 6px; opacity: .78; font-family: var(--vscode-editor-font-family); font-size: 12px; overflow-wrap: anywhere; }
+  .preview-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--vscode-panel-border); }
 </style>
 </head>
 <body>
@@ -62,6 +80,20 @@ function getWebviewHtml(webview) {
     <div>Graph</div><div>Message</div><div>Time</div><div>Commit</div>
   </div>
   <div id="rows"></div>
+  <div class="modal-backdrop" id="syncPreview" hidden>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="syncPreviewTitle">
+      <div class="preview-header">
+        <div class="preview-title" id="syncPreviewTitle">Review Sync</div>
+        <div class="preview-summary" id="syncPreviewSummary"></div>
+      </div>
+      <div class="pushed-warning" id="pushedWarning" hidden></div>
+      <div class="preview-list" id="syncPreviewList"></div>
+      <div class="preview-actions">
+        <button class="secondary" id="cancelSync">Cancel</button>
+        <button id="confirmSync">Sync changes</button>
+      </div>
+    </div>
+  </div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   let model = null;
@@ -73,6 +105,12 @@ function getWebviewHtml(webview) {
   const refreshButton = document.getElementById('refresh');
   const statusEl = document.getElementById('status');
   const countEl = document.getElementById('changedCount');
+  const previewEl = document.getElementById('syncPreview');
+  const previewSummaryEl = document.getElementById('syncPreviewSummary');
+  const previewListEl = document.getElementById('syncPreviewList');
+  const pushedWarningEl = document.getElementById('pushedWarning');
+  const cancelSyncButton = document.getElementById('cancelSync');
+  const confirmSyncButton = document.getElementById('confirmSync');
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -223,6 +261,71 @@ function getWebviewHtml(webview) {
     updateToolbar();
   }
 
+  function getPreviewData() {
+    const entries = [...edits.values()]
+      .sort((a, b) => a.index - b.index)
+      .map(change => {
+        const commit = model.commits[change.index];
+        const subjectChanged = change.subject !== undefined && change.subject !== change.originalSubject.trim();
+        const timeChanged = change.time !== undefined && change.time !== change.originalTime;
+        return { change, commit, subjectChanged, timeChanged, pushed: commit?.pushed === true };
+      });
+    return { entries, pushedCount: entries.filter(entry => entry.pushed).length };
+  }
+
+  function renderSyncPreview() {
+    const preview = getPreviewData();
+    previewSummaryEl.textContent = preview.entries.length + ' changed commit' + (preview.entries.length === 1 ? '' : 's') + ' will be synced.';
+    pushedWarningEl.hidden = preview.pushedCount === 0;
+    pushedWarningEl.textContent = preview.pushedCount === 0
+      ? ''
+      : 'Pushed history will be rewritten: ' + preview.pushedCount + ' changed commit' + (preview.pushedCount === 1 ? ' is' : 's are') + ' already in the push ref. Updating the remote later may require a force push.';
+    confirmSyncButton.textContent = preview.pushedCount > 0 ? 'Sync pushed history' : 'Sync changes';
+
+    previewListEl.innerHTML = preview.entries.map(entry => {
+      const badges = [];
+      if (entry.subjectChanged) badges.push('<span class="preview-badge">Message</span>');
+      if (entry.timeChanged) badges.push('<span class="preview-badge">Date</span>');
+      if (entry.change.normalizeDates === true) badges.push('<span class="preview-badge">Normalize date</span>');
+      if (entry.pushed) badges.push('<span class="preview-badge pushed">Pushed</span>');
+
+      const details = [];
+      if (entry.subjectChanged) {
+        details.push('<div class="preview-detail">Message: ' + escapeHtml(entry.change.originalSubject.trim()) + ' → ' + escapeHtml(entry.change.subject) + '</div>');
+      }
+      if (entry.timeChanged) {
+        details.push('<div class="preview-detail">Time: ' + escapeHtml(dateToLocalInput(entry.change.originalTime)) + ' → ' + escapeHtml(dateToLocalInput(entry.change.time)) + '</div>');
+      } else if (entry.change.normalizeDates === true) {
+        details.push('<div class="preview-detail">Committer Date → Author Date: ' + escapeHtml(dateToLocalInput(entry.change.originalTime)) + '</div>');
+      }
+
+      return '<div class="preview-item">' +
+        '<div class="preview-item-head"><span class="preview-hash">' + escapeHtml(entry.commit?.shortHash || ('HEAD~' + entry.change.index)) + '</span>' +
+        '<span class="preview-subject">' + escapeHtml(entry.commit?.subject || entry.change.originalSubject) + '</span></div>' +
+        '<div class="preview-badges">' + badges.join('') + '</div>' + details.join('') +
+      '</div>';
+    }).join('');
+  }
+
+  function openSyncPreview() {
+    if (!model || edits.size === 0 || chronologyConflictCount > 0 || syncInProgress) return;
+    renderSyncPreview();
+    previewEl.hidden = false;
+    confirmSyncButton.focus?.();
+  }
+
+  function closeSyncPreview() {
+    previewEl.hidden = true;
+  }
+
+  function startSync() {
+    if (!model || edits.size === 0 || chronologyConflictCount > 0 || syncInProgress) return;
+    closeSyncPreview();
+    setSyncInProgress(true);
+    statusEl.textContent = 'Syncing…';
+    vscode.postMessage({ type: 'sync', baseHead: model.head, changes: [...edits.values()] });
+  }
+
   function updateToolbar() {
     const count = edits.size;
     countEl.textContent = count + ' changed';
@@ -240,11 +343,14 @@ function getWebviewHtml(webview) {
     refreshButton.disabled = value;
   }
 
-  syncButton.addEventListener('click', () => {
-    if (!model || edits.size === 0) return;
-    setSyncInProgress(true);
-    statusEl.textContent = 'Syncing…';
-    vscode.postMessage({ type: 'sync', baseHead: model.head, changes: [...edits.values()] });
+  syncButton.addEventListener('click', openSyncPreview);
+  cancelSyncButton.addEventListener('click', closeSyncPreview);
+  confirmSyncButton.addEventListener('click', startSync);
+  previewEl.addEventListener('click', event => {
+    if (event.target === previewEl) closeSyncPreview();
+  });
+  window.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !previewEl.hidden && !syncInProgress) closeSyncPreview();
   });
 
   refreshButton.addEventListener('click', () => {
@@ -257,6 +363,7 @@ function getWebviewHtml(webview) {
   window.addEventListener('message', event => {
     const message = event.data;
     if (message.type === 'history') {
+      closeSyncPreview();
       model = message;
       edits.clear();
       refreshButton.disabled = syncInProgress;
@@ -264,6 +371,7 @@ function getWebviewHtml(webview) {
     } else if (message.type === 'syncProgress') {
       statusEl.textContent = message.message || 'Syncing…';
     } else if (message.type === 'syncDone') {
+      closeSyncPreview();
       setSyncInProgress(false);
       if (message.commits) {
         model = message;
@@ -274,6 +382,7 @@ function getWebviewHtml(webview) {
       refreshButton.disabled = false;
       updateToolbar();
     } else if (message.type === 'syncError') {
+      closeSyncPreview();
       setSyncInProgress(false);
       statusEl.textContent = message.message || 'Sync failed.';
       refreshButton.disabled = false;
