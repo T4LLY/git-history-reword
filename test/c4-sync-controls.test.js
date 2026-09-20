@@ -20,6 +20,7 @@ class Element {
     this.children = [];
     this.listeners = {};
     this.disabled = false;
+    this.hidden = false;
     this.value = '';
     this.dataset = {};
     this.selectionStart = 0;
@@ -84,13 +85,17 @@ class Element {
         input.parent = row;
         row.children.push(input);
       }
+      const revertButton = new Element('', 'secondary revert-edit');
+      revertButton.hidden = true;
+      revertButton.parent = row;
+      row.children.push(revertButton);
       this.children.push(row);
     }
   }
 }
 
 function createDom() {
-  const elements = new Map(['repo', 'branch', 'status', 'changedCount', 'sync', 'refresh', 'rows', 'syncPreview', 'syncPreviewSummary', 'syncPreviewList', 'pushedWarning', 'cancelSync', 'confirmSync']
+  const elements = new Map(['repo', 'branch', 'status', 'changedCount', 'sync', 'revertAll', 'refresh', 'rows', 'syncPreview', 'syncPreviewSummary', 'syncPreviewList', 'pushedWarning', 'cancelSync', 'confirmSync']
     .map(id => [id, new Element(id)]));
   elements.get('rows').querySelectorAll = Element.prototype.querySelectorAll;
   return {
@@ -180,6 +185,58 @@ test('sync preview lists changes and warns before rewriting pushed history', () 
   assert.equal(webview.messages.filter(message => message.type === 'sync').length, 0);
 });
 
+
+test('individual Revert discards only that commit unsynced edit', () => {
+  const commits = [
+    { index: 0, shortHash: 'aaa0000', subject: 'first', authorDate: '2026-09-20T12:00:00Z', committerDate: '2026-09-20T12:00:00Z', parentCount: 1, pushed: false },
+    { index: 1, shortHash: 'bbb1111', subject: 'second', authorDate: '2026-09-20T11:00:00Z', committerDate: '2026-09-20T11:00:00Z', parentCount: 0, pushed: false }
+  ];
+  const webview = createWebview({ commits });
+  const rows = webview.document.elements.get('rows').children;
+  const firstMessage = rows[0].children[0];
+  const secondMessage = rows[1].children[0];
+  const firstRevert = rows[0].querySelector('.revert-edit');
+  const secondRevert = rows[1].querySelector('.revert-edit');
+
+  firstMessage.value = 'changed first';
+  firstMessage.dispatch('input');
+  secondMessage.value = 'changed second';
+  secondMessage.dispatch('input');
+  assert.equal(webview.document.elements.get('changedCount').textContent, '2 changed');
+  assert.equal(firstRevert.hidden, false);
+  assert.equal(secondRevert.hidden, false);
+
+  firstRevert.dispatch('click');
+  assert.equal(firstMessage.value, 'first');
+  assert.equal(secondMessage.value, 'changed second');
+  assert.equal(firstRevert.hidden, true);
+  assert.equal(secondRevert.hidden, false);
+  assert.equal(webview.document.elements.get('changedCount').textContent, '1 changed');
+  assert.equal(webview.document.elements.get('sync').disabled, false);
+});
+
+test('Revert All discards every unsynced edit without refreshing Git history', () => {
+  const commits = [
+    { index: 0, shortHash: 'aaa0000', subject: 'first', authorDate: '2026-09-20T12:00:00Z', committerDate: '2026-09-20T12:00:00Z', parentCount: 1, pushed: false },
+    { index: 1, shortHash: 'bbb1111', subject: 'second', authorDate: '2026-09-20T11:00:00Z', committerDate: '2026-09-20T11:00:00Z', parentCount: 0, pushed: false }
+  ];
+  const webview = createWebview({ commits });
+  const rows = webview.document.elements.get('rows').children;
+
+  rows[0].children[0].value = 'changed first';
+  rows[0].children[0].dispatch('input');
+  rows[1].children[1].value = '2026-09-20 20:00:00';
+  rows[1].children[1].dispatch('input');
+  assert.equal(webview.document.elements.get('revertAll').disabled, false);
+
+  webview.document.elements.get('revertAll').dispatch('click');
+  assert.equal(rows[0].children[0].value, 'first');
+  assert.equal(rows[1].children[1].value, webview.context.dateToLocalInput(commits[1].authorDate));
+  assert.equal(webview.document.elements.get('changedCount').textContent, '0 changed');
+  assert.equal(webview.document.elements.get('revertAll').disabled, true);
+  assert.equal(webview.document.elements.get('sync').disabled, true);
+  assert.equal(webview.messages.filter(message => message.type === 'refresh').length, 0);
+});
 
 test('timestamp editor uses an explicit 24-hour local format', () => {
   const webview = createWebview();

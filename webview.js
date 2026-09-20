@@ -22,7 +22,7 @@ function getWebviewHtml(webview) {
   button:hover { background: var(--vscode-button-hoverBackground); }
   button.secondary { color: var(--vscode-foreground); background: transparent; border-color: var(--vscode-button-secondaryBackground); }
   button:disabled { opacity: .45; cursor: default; }
-  .header, .row { display: grid; grid-template-columns: 34px minmax(340px, 1fr) 258px 82px; align-items: center; min-height: 30px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .header, .row { display: grid; grid-template-columns: 34px minmax(340px, 1fr) 258px 82px 74px; align-items: center; min-height: 30px; border-bottom: 1px solid var(--vscode-panel-border); }
   .header { position: sticky; top: 44px; z-index: 9; min-height: 28px; background: var(--vscode-editor-background); font-size: 11px; font-weight: 600; opacity: .8; }
   .header > div, .row > div { padding: 3px 8px; min-width: 0; }
   .graph { position: relative; height: 100%; min-height: 30px; }
@@ -38,6 +38,8 @@ function getWebviewHtml(webview) {
   .time { display: flex; align-items: center; gap: 4px; }
   .time-input { min-width: 0; }
   .restore-date { flex: 0 0 auto; padding: 3px 7px; font-size: 11px; }
+  .actions { display: flex; align-items: center; justify-content: flex-start; }
+  .revert-edit { padding: 3px 7px; font-size: 11px; }
   .hash { opacity: .62; font-family: var(--vscode-editor-font-family); }
   .row.dirty .message input, .row.dirty .time input, .row.dirty .hash { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
   .row.dirty .dot { background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); }
@@ -75,11 +77,12 @@ function getWebviewHtml(webview) {
     <span class="status" id="status"></span>
     <span class="spacer"></span>
     <span class="changed-count" id="changedCount">0 changed</span>
+    <button class="secondary" id="revertAll" disabled>Revert All</button>
     <button class="secondary" id="refresh">Refresh</button>
     <button id="sync" disabled>Sync</button>
   </div>
   <div class="header">
-    <div>Graph</div><div>Message</div><div>Time</div><div>Commit</div>
+    <div>Graph</div><div>Message</div><div>Time</div><div>Commit</div><div>Actions</div>
   </div>
   <div id="rows"></div>
   <div class="modal-backdrop" id="syncPreview" hidden>
@@ -105,6 +108,7 @@ function getWebviewHtml(webview) {
   let invalidTimeCount = 0;
   const rowsEl = document.getElementById('rows');
   const syncButton = document.getElementById('sync');
+  const revertAllButton = document.getElementById('revertAll');
   const refreshButton = document.getElementById('refresh');
   const statusEl = document.getElementById('status');
   const countEl = document.getElementById('changedCount');
@@ -201,6 +205,7 @@ function getWebviewHtml(webview) {
         '<div class="message"><input class="cell-input message-input" ' + messageDisabled + ' value="' + escapeHtml(commit.subject) + '" title="Edit commit message"></div>' +
         '<div class="time"><input class="cell-input time-input" type="text" inputmode="numeric" spellcheck="false" placeholder="YYYY-MM-DD HH:mm:ss" ' + timeDisabled + ' value="' + escapeHtml(localTime) + '" title="24-hour local time. Changes both Author Date and Committer Date">' + restore + '</div>' +
         '<div class="hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.shortHash) + '</div>' +
+        '<div class="actions"><button class="secondary revert-edit" ' + (merge || syncInProgress ? 'disabled' : '') + ' hidden title="Discard unsynced changes for this commit">Revert</button></div>' +
       '</div>';
     }).join('');
 
@@ -210,11 +215,13 @@ function getWebviewHtml(webview) {
       const messageInput = row.querySelector('.message-input');
       const timeInput = row.querySelector('.time-input');
       const restoreButton = row.querySelector('.restore-date');
+      const revertButton = row.querySelector('.revert-edit');
       const onChange = () => updateEdit(index, commit, row, messageInput, timeInput);
       messageInput.addEventListener('input', onChange);
       timeInput.addEventListener('input', onChange);
       timeInput.addEventListener('focus', () => selectTimestampSegment(timeInput));
       timeInput.addEventListener('click', () => selectTimestampSegment(timeInput));
+      revertButton?.addEventListener('click', () => revertEdit(index, commit, row, messageInput, timeInput, restoreButton, revertButton));
       restoreButton?.addEventListener('click', () => {
         const existing = edits.get(index) || {};
         edits.set(index, {
@@ -310,6 +317,62 @@ function getWebviewHtml(webview) {
       });
       row.classList.add('dirty');
     }
+    const revertButton = row.querySelector('.revert-edit');
+    if (revertButton) revertButton.hidden = !edits.has(index);
+    updateChronology();
+    updateToolbar();
+  }
+
+  function resetRowEdit(index, commit, row, messageInput, timeInput, restoreButton, revertButton) {
+    edits.delete(index);
+    messageInput.value = commit.subject;
+    timeInput.value = dateToLocalInput(commit.authorDate);
+    row.classList.remove('dirty');
+    row.classList.remove('chronology-error');
+    row.classList.remove('time-invalid');
+
+    const merge = commit.parentCount > 1;
+    const dateMismatch = commit.authorDate !== commit.committerDate;
+    if (dateMismatch) row.classList.add('date-mismatch');
+    else row.classList.remove('date-mismatch');
+
+    messageInput.disabled = syncInProgress || merge;
+    timeInput.disabled = syncInProgress || merge || dateMismatch;
+    if (restoreButton) {
+      restoreButton.hidden = !dateMismatch;
+      restoreButton.disabled = syncInProgress || merge;
+    }
+    if (revertButton) {
+      revertButton.hidden = true;
+      revertButton.disabled = syncInProgress || merge;
+    }
+  }
+
+  function revertEdit(index, commit, row, messageInput, timeInput, restoreButton, revertButton) {
+    if (syncInProgress || !edits.has(index)) return;
+    resetRowEdit(index, commit, row, messageInput, timeInput, restoreButton, revertButton);
+    updateChronology();
+    updateToolbar();
+  }
+
+  function revertAllEdits() {
+    if (syncInProgress || edits.size === 0) return;
+    if (!confirm('Revert all unsynced changes?')) return;
+
+    rowsEl.querySelectorAll('.row').forEach(row => {
+      const index = Number(row.dataset.index);
+      if (!edits.has(index)) return;
+      const commit = model.commits[index];
+      resetRowEdit(
+        index,
+        commit,
+        row,
+        row.querySelector('.message-input'),
+        row.querySelector('.time-input'),
+        row.querySelector('.restore-date'),
+        row.querySelector('.revert-edit')
+      );
+    });
     updateChronology();
     updateToolbar();
   }
@@ -382,21 +445,24 @@ function getWebviewHtml(webview) {
   function updateToolbar() {
     const count = edits.size;
     countEl.textContent = count + ' changed';
+    revertAllButton.disabled = syncInProgress || count === 0;
     syncButton.disabled = syncInProgress || count === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0;
   }
 
   function setSyncInProgress(value) {
     syncInProgress = value;
-    rowsEl.querySelectorAll('.message-input, .time-input, .restore-date').forEach(control => {
+    rowsEl.querySelectorAll('.message-input, .time-input, .restore-date, .revert-edit').forEach(control => {
       const row = control.closest('.row');
       const mismatchLocked = control.classList.contains('time-input') && row.classList.contains('date-mismatch');
       control.disabled = value || row.classList.contains('merge') || mismatchLocked;
     });
+    revertAllButton.disabled = value || edits.size === 0;
     syncButton.disabled = value || edits.size === 0 || chronologyConflictCount > 0 || invalidTimeCount > 0;
     refreshButton.disabled = value;
   }
 
   syncButton.addEventListener('click', openSyncPreview);
+  revertAllButton.addEventListener('click', revertAllEdits);
   cancelSyncButton.addEventListener('click', closeSyncPreview);
   confirmSyncButton.addEventListener('click', startSync);
   previewEl.addEventListener('click', event => {
